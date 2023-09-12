@@ -1,8 +1,10 @@
 const express = require("express");
-const jwt = require("jsonwebtoken");
+
 const bcrypt = require("bcrypt");
 
-const UserModel = require("../Models/userModel");
+const ValidateUserDetails = require("../Middlewares/ValidateUserDetails");
+const UserModel = require("../models/userModel");
+const BlacklistModel = require("../Models/blacklistModel");
 
 const usersRouter = express.Router();
 
@@ -14,53 +16,34 @@ const getUsers = async (req, res) => {
     return res.status(400).json({ message: error.message });
   }
 };
-const isValidEmail = (email) => {
-  const pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-  return pattern.test(email);
-};
+
 const registerUser = async (req, res) => {
   try {
     let { username, email, password } = req.body;
-    if (!email || !password || !username) {
-      return res.status(400).json({
-        status: "error",
-        message:
-          "Registration failed. Please provide required details " + !email
-            ? "email"
-            : !password
-            ? "password"
-            : "username",
-      });
-    }
-    if (!isValidEmail(email)) {
-      return "Please provide a valid email address";
-    }
     const user = await UserModel.findOne({ email: email });
-    console.log(user);
+
     if (user) {
       return res.status(400).json({
         status: "error",
         message: "user alredy exists please login",
       });
     }
-    const hashedPassword = await bcrypt.hash(password, 5);
+
+    const hashedPassword = await bcrypt.hash(
+      password,
+      Number(process.env.HASH_SALT_ROUND)
+    );
 
     const newUser = await UserModel.create({
       email,
       username,
       password: hashedPassword,
     });
-    const token = jwt.sign(
-      { user: { id: newUser._id, username, email } },
-      process.env.JWT_SECRET_KEY,
-      {
-        expiresIn: "3d",
-      }
-    );
+    const token = user.generateAuthToken();
     return res.status(200).json({
       status: "success",
       message: "Congratulations! You have successfully registered.",
-      user: { username, email: email, userId: newUser._id },
+      user: { username, email: email, userId: newUser._id, role: user.role },
       token: token,
     });
   } catch (error) {
@@ -86,34 +69,47 @@ const loginUser = async (req, res) => {
       if (!isMatch) {
         return res.status(400).json({ message: "Invalid password" });
       }
-      const token = jwt.sign(
-        { user: { id: user._id, username: user.username, email } },
-        process.env.JWT_SECRET_KEY,
-        {
-          expiresIn: "3d",
-        }
-      );
+
+      const token = user.generateAuthToken();
       return res.status(200).json({
         status: "success",
         message: "Login Successful",
-        user: { username: user.username, email, userId: user._id },
+        user: {
+          username: user.username,
+          email,
+          userId: user._id,
+          role: user.role,
+        },
         token: token,
       });
     }
   } catch (error) {
-    console.log(
-      "*******************error from user login**********************",
-      error
-    );
-    return res.status(400).json({
-      status: "error",
-      message: "Login failed",
+    console.log("error from user login", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
     });
   }
 };
 
+const logoutUser = async (req, res) => {
+  try {
+    const token = req.headers["auth-token"];
+    if (token) {
+      await BlacklistModel.create({ token });
+      res.status(200).josn({ success: true, msg: "Logout sucsessfull" });
+    }
+  } catch (error) {
+    console.log("error from user logout", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
 usersRouter.post("/login", loginUser);
-usersRouter.post("/register", registerUser);
+usersRouter.post("/register", ValidateUserDetails, registerUser);
+usersRouter.post("/logout", logoutUser);
 usersRouter.get("/", getUsers);
 
 module.exports = usersRouter;
